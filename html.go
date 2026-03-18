@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,7 +23,6 @@ type Result struct {
 	FileName string
 	Content  string
 	Index    int
-	District string
 }
 
 type FileTask struct {
@@ -97,7 +97,7 @@ func main() {
 		return
 	}
 
-	fmt.Printf("处理完成，共提取 %d 个表格\n", len(allResults))
+	fmt.Printf("处理完成，共提取 %d 个区块\n", len(allResults))
 }
 
 func extractNumber(filename string) int {
@@ -122,64 +122,57 @@ func processFile(task FileTask, workerID int, results chan<- Result) {
 		return
 	}
 
-	district := extractDistrict(contentStr)
-	tableContent := extractFirstWikitable(contentStr)
-	if tableContent == "" {
-		fmt.Printf("Worker %d: 文件 %s 包含目标文本但未找到wikitable\n", workerID, filepath.Base(task.FilePath))
+	sectionContent := extractSection(contentStr)
+	if sectionContent == "" {
+		fmt.Printf("Worker %d: 文件 %s 包含目标文本但未找到完整区块\n", workerID, filepath.Base(task.FilePath))
 		return
 	}
 
 	results <- Result{
 		FileName: filepath.Base(task.FilePath),
-		Content:  tableContent,
+		Content:  sectionContent,
 		Index:    task.Index,
-		District: district,
 	}
 }
 
-func extractDistrict(content string) string {
-	// 找到目标文本的位置
-	targetIndex := strings.Index(content, targetText)
-	if targetIndex == -1 {
+func extractSection(content string) string {
+	// 查找最后一次出现目标文本的位置
+	searchStart := 0
+	var lastTargetIndex int = -1
+	for {
+		idx := strings.Index(content[searchStart:], targetText)
+		if idx == -1 {
+			break
+		}
+		idx += searchStart
+		lastTargetIndex = idx
+		searchStart = idx + len(targetText)
+	}
+
+	if lastTargetIndex == -1 {
 		return ""
 	}
 
-	// 从目标文本位置开始搜索</small>标签
-	smallEnd := strings.Index(content[targetIndex:], "</small>")
-	if smallEnd == -1 {
-		return ""
-	}
-	smallEnd += targetIndex
+	targetIndex := lastTargetIndex
 
-	// 从</small>标签位置开始搜索</div>标签
-	divEnd := strings.Index(content[smallEnd:], "</div>")
-	if divEnd == -1 {
-		return ""
-	}
-	divEnd += smallEnd
-
-	// 提取</small>到</div>之间的内容
-	districtPart := strings.TrimSpace(content[smallEnd+8 : divEnd])
-	return districtPart
-}
-
-func extractFirstWikitable(content string) string {
-	targetIndex := strings.Index(content, targetText)
-	if targetIndex == -1 {
-		return ""
+	lineStart := strings.LastIndex(content[:targetIndex], "\n")
+	if lineStart == -1 {
+		lineStart = 0
+	} else {
+		lineStart++
 	}
 
-	contentAfterTarget := content[targetIndex:]
+	contentAfterLine := content[lineStart:]
 
-	tableStart := strings.Index(contentAfterTarget, `<table class="wikitable">`)
+	tableStart := strings.Index(contentAfterLine, `<table class="wikitable">`)
 	if tableStart == -1 {
-		tableStart = strings.Index(contentAfterTarget, `<table class="wikitable"`)
+		tableStart = strings.Index(contentAfterLine, `<table class="wikitable"`)
 	}
 	if tableStart == -1 {
 		return ""
 	}
 
-	contentAfterTableStart := contentAfterTarget[tableStart:]
+	contentAfterTableStart := contentAfterLine[tableStart:]
 
 	var tableEnd int
 	depth := 0
@@ -207,14 +200,10 @@ func extractFirstWikitable(content string) string {
 		return ""
 	}
 
-	return contentAfterTableStart[:tableEnd]
+	return contentAfterLine[:tableStart+tableEnd]
 }
 
 func writeResults(results []Result) error {
-	if err := os.WriteFile(outputFile, []byte(""), 0644); err != nil {
-		return fmt.Errorf("清空输出文件失败: %w", err)
-	}
-
 	var buffer bytes.Buffer
 	buffer.WriteString("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n<title>第50屆日本眾議院議員總選舉選舉結果</title>\n<style>\n")
 	buffer.WriteString("body { font-family: Arial, sans-serif; margin: 20px; }\n")
@@ -227,12 +216,8 @@ func writeResults(results []Result) error {
 	buffer.WriteString("<h1>第50屆日本眾議院議員總選舉選舉結果</h1>\n")
 
 	for _, result := range results {
-		title := result.District
-		if title == "" {
-			title = result.FileName
-		}
-		buffer.WriteString(fmt.Sprintf("<div class=\"section\">\n"))
-		buffer.WriteString(fmt.Sprintf("<div class=\"filename\">%s</div>\n", title))
+		buffer.WriteString("<div class=\"section\">\n")
+		buffer.WriteString(fmt.Sprintf("<div class=\"filename\">%s</div>\n", html.EscapeString(result.FileName)))
 		buffer.WriteString(result.Content)
 		buffer.WriteString("</div>\n")
 	}
