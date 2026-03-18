@@ -136,24 +136,27 @@ func processFile(task FileTask, workerID int, results chan<- Result) {
 }
 
 func extractSection(content string) string {
-	// 查找最后一次出现目标文本的位置
+	// 查找第三次出现目标文本的位置
 	searchStart := 0
-	var lastTargetIndex int = -1
+	var targetIndex int = -1
+	count := 0
 	for {
 		idx := strings.Index(content[searchStart:], targetText)
 		if idx == -1 {
 			break
 		}
 		idx += searchStart
-		lastTargetIndex = idx
+		count++
+		if count == 3 {
+			targetIndex = idx
+			break
+		}
 		searchStart = idx + len(targetText)
 	}
 
-	if lastTargetIndex == -1 {
+	if targetIndex == -1 {
 		return ""
 	}
-
-	targetIndex := lastTargetIndex
 
 	lineStart := strings.LastIndex(content[:targetIndex], "\n")
 	if lineStart == -1 {
